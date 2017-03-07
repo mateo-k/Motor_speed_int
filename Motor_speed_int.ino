@@ -10,6 +10,8 @@ const int PROCENT = 100;
 //Podlaczenie pinow
 const int LED = 13;
 
+
+
 const int POT1_PIN = A0;
 const int POT2_PIN = A7;
 const int POT1_ADC_INPUT = 0;
