@@ -10,8 +10,6 @@ const int PROCENT = 100;
 //Podlaczenie pinow
 const int LED = 13;
 
-
-
 const int POT1_PIN = A0;
 const int POT2_PIN = A7;
 const int POT1_ADC_INPUT = 0;
@@ -24,7 +22,7 @@ const int POT2_MAX_VAL = 5000;
 const int Imcu_PIN = A1;
 const int Idrv_PIN = A6;
 const int Imcu_ADC_INPUT = 1;
-const int Idrv_ADC_INPUT = 6;
+const int Idrv_ADC_INPUT = 6; // motor current
 
 const int Vcc_PIN = A2;
 const int Vbatt_PIN = A3;
@@ -44,6 +42,10 @@ const int ENC_B_PIN = 3;
 //Filtracja enkodera
 const int MIN_PERIOD = 200;
 
+//Orientacja rotora
+const int CUR_SURGE_P = 2;  // prąd krańcówki 
+const int N_AVG_CUR = 10;    // bufor uśredniania prądu
+
 volatile bool last_enc_a;
 volatile bool last_enc_b;
 volatile bool fault;
@@ -57,6 +59,9 @@ volatile long lowest_change_a_per = LONG_MAX;
 volatile long lowest_change_b_per = LONG_MAX;
 
 volatile long position;
+
+volatile short cur_act;
+volatile short cur_avg;
 
 const long USEC_IN_SEC = 1000000;
 
@@ -90,13 +95,6 @@ void setup() {
 }
 
 void loop() {
-  static long loc_lowest_change_a_per;
-  static long loc_lowest_change_b_per;
-  static long printable_lowest_change_a_per;
-  static long printable_lowest_change_b_per;
-  static long loc_position;
-  static long loc_last_change_a_per;
-  static long loc_last_change_b_per;
   
 const long PROCENT = 100L;
   int pot1 = (PROCENT * analogRead(POT1_ADC_INPUT) )/POT1_MAX_VAL;
@@ -104,6 +102,12 @@ const long MAX_PWM = 255L;
   int pwm = ((pot1 - PROCENT/2) * MAX_PWM) / (PROCENT/2);
   bool dir = pwm>0 ? 1 : 0 ;
   pwm = pwm>0 ? pwm : -pwm;
+
+  if(fault)
+    digitalWrite(LED,HIGH);
+  else
+    digitalWrite(LED,LOW);
+  fault = false;
 
   digitalWrite(DIR_MAX_PIN, dir);
   if(pwm == 255) digitalWrite(PWM_MAX_PIN, HIGH);
@@ -115,75 +119,141 @@ const long MAX_PWM = 255L;
   if(millisec - last_millis > 250)
   {
     last_millis = millisec;
-
-    if(fault)
-      digitalWrite(LED,HIGH);
-    else
-      digitalWrite(LED,LOW);
-    fault = false;
-
-    noInterrupts();
-    loc_lowest_change_a_per = lowest_change_a_per;
-    lowest_change_a_per = LONG_MAX;
-    interrupts();
-
-
-    
-    if(loc_lowest_change_a_per < LONG_MAX)
-      printable_lowest_change_a_per = loc_lowest_change_a_per;
-    else
-      printable_lowest_change_a_per = LONG_MAX;
       
-    noInterrupts();
-    loc_lowest_change_b_per = lowest_change_b_per;
-    lowest_change_b_per = LONG_MAX;
-    interrupts();
-    printable_lowest_change_b_per = LONG_MAX;
-
-    if(loc_lowest_change_b_per < LONG_MAX)
-      printable_lowest_change_b_per = loc_lowest_change_b_per;
-    else
-      printable_lowest_change_b_per = LONG_MAX;
-      
-    noInterrupts();
-    loc_position = position;
-    interrupts();
-
-    noInterrupts();
-    loc_last_change_a_per = last_change_a_per;
-    interrupts();
-    
-    noInterrupts();
-    loc_last_change_b_per = last_change_b_per;
-    interrupts();
-
-    unsigned int freq_a = USEC_IN_SEC / loc_last_change_a_per;
-    unsigned int freq_b = USEC_IN_SEC / loc_last_change_b_per; 
-
-    unsigned int max_freq_a = USEC_IN_SEC / loc_lowest_change_a_per; 
-    unsigned int max_freq_b = USEC_IN_SEC / loc_lowest_change_b_per; 
-
-// przerwanie z kanału B enkodera wydaje się przychodzić częściej niż
-// powinno. Porównaj kanał A do B na oscyloskopie.
-
     Serial.print(pot1);
     Serial.print("\t");
-    Serial.print(loc_position);
+    Serial.print(motor_pos());
     Serial.print("\t");
-    Serial.print(freq_a);
+    if ( cur_surge() )
+      Serial.print("cur_surge = true \t");
+    else
+      Serial.print("cur_surge = false\t");
+
+    Serial.print(cur_act);
     Serial.print("\t");
-    Serial.print(freq_b);    
-    Serial.print("\t");
-    Serial.print(max_freq_a);
-    Serial.print("\t");
-    Serial.print(max_freq_b);    
-    Serial.print("\t");
-    Serial.print(printable_lowest_change_a_per);
-    Serial.print("\t");
-    Serial.print(printable_lowest_change_b_per);
+    Serial.print(cur_avg);
     Serial.print("\n");
+    MotorControl();
   }
 }
+
+void MotorControl()
+{
+  static long loc_lowest_change_a_per;
+  static long loc_lowest_change_b_per;
+  static long printable_lowest_change_a_per;
+  static long printable_lowest_change_b_per;
+  static long loc_position;
+  static long loc_last_change_a_per;
+  static long loc_last_change_b_per;
+
+
+  noInterrupts();
+  loc_lowest_change_a_per = lowest_change_a_per;
+  lowest_change_a_per = LONG_MAX;
+  interrupts();
+
+  if(loc_lowest_change_a_per < LONG_MAX)
+    printable_lowest_change_a_per = loc_lowest_change_a_per;
+  else
+    printable_lowest_change_a_per = LONG_MAX;
+    
+  noInterrupts();
+  loc_lowest_change_b_per = lowest_change_b_per;
+  lowest_change_b_per = LONG_MAX;
+  interrupts();
+  printable_lowest_change_b_per = LONG_MAX;
+
+  if(loc_lowest_change_b_per < LONG_MAX)
+    printable_lowest_change_b_per = loc_lowest_change_b_per;
+  else
+    printable_lowest_change_b_per = LONG_MAX;
+    
+  noInterrupts();
+  loc_position = position;
+  interrupts();
+
+  noInterrupts();
+  loc_last_change_a_per = last_change_a_per;
+  interrupts();
+
+  noInterrupts();
+  loc_last_change_b_per = last_change_b_per;
+  interrupts();
+
+  unsigned int freq_a = USEC_IN_SEC / loc_last_change_a_per;
+  unsigned int freq_b = USEC_IN_SEC / loc_last_change_b_per; 
+
+  unsigned int max_freq_a = USEC_IN_SEC / loc_lowest_change_a_per; 
+  unsigned int max_freq_b = USEC_IN_SEC / loc_lowest_change_b_per; 
+
+  // przerwanie z kanału B enkodera wydaje się przychodzić częściej niż
+  // powinno. Porównaj kanał A do B na oscyloskopie.
+  Serial.print(loc_position);
+  Serial.print("\t");
+  Serial.print(freq_a);
+  Serial.print("\t");
+  Serial.print(freq_b);    
+  Serial.print("\t");
+  Serial.print(max_freq_a);
+  Serial.print("\t");
+  Serial.print(max_freq_b);    
+  Serial.print("\t");
+  Serial.print(printable_lowest_change_a_per);
+  Serial.print("\t");
+  Serial.print(printable_lowest_change_b_per);
+  Serial.print("\n");
+
+  delay(1);        // delay in between reads for stability
+
+}
+
+long motor_pos()
+{
+  static long loc_position;
+  noInterrupts();
+  loc_position = position;
+  interrupts();
+  return loc_position;
+}
+
+bool cur_surge()
+{
+  static short cur_tab[N_AVG_CUR] = {0};
+  static long  cur_sum = 0;
+  static short tab_pos = 0;
+
+  static bool init = true;
+
+  if (tab_pos == N_AVG_CUR-1)
+    init = false;
+
+  cur_sum -= cur_tab[tab_pos];
+  cur_act = - ( analogRead(Idrv_ADC_INPUT)-512 );
+  
+  cur_tab[tab_pos] = cur_act;
+  cur_sum += cur_act;
+
+  tab_pos = tab_pos >= N_AVG_CUR-1 ? 0 : tab_pos + 1;
+
+  cur_avg = cur_sum / N_AVG_CUR;
+
+  if ( cur_act > CUR_SURGE_P*cur_avg && ~init)
+    return true;
+  else
+    return false;
+}
+
+void orient_motor()
+{
+
+
+
+}
+
+
+
+
 
 void Enc_a_ISR()
 {
@@ -198,14 +268,17 @@ void Enc_a_ISR()
     static bool enc_a;
     enc_a = digitalRead(ENC_A_PIN);
     if (enc_a and last_enc_a) fault = true; //Nic sie nie zmienilo, stoi w miejscu i swieci dioda
-    else if(enc_a xor last_enc_b) position++;
-    else position--;
-    last_enc_a = enc_a;
-    
-    last_change_tp_a = change_tp_a;
-    last_change_a_per = change_a_per;
-    if( change_a_per<lowest_change_a_per ) 
-      lowest_change_a_per = change_a_per;  
+    else
+    {
+      if(enc_a xor last_enc_b) position++;
+      else position--;
+      last_enc_a = enc_a;
+      
+      last_change_tp_a = change_tp_a;
+      last_change_a_per = change_a_per;
+      if( change_a_per<lowest_change_a_per ) 
+        lowest_change_a_per = change_a_per;  
+    }
   }
     
 }
@@ -221,18 +294,17 @@ void Enc_b_ISR()
   {
     static bool enc_b;
     enc_b = digitalRead(ENC_B_PIN);
-    if (enc_b and last_enc_b) fault = true; //Nic sie nie b, stoi w miejscu i swieci dioda
-    else if(enc_b xor last_enc_a) position--;
-    else position++;
-    last_enc_b = enc_b;
-      
-    static long change_tp_b;
-    change_tp_b = micros();
-    static long change_b_per;
-    change_b_per = (change_tp_b - last_change_tp_b);
-    last_change_tp_b = change_tp_b;
-    last_change_b_per = change_b_per;
-    if( change_b_per<lowest_change_b_per ) 
-      lowest_change_b_per = change_b_per;
+    if (enc_b and last_enc_b) fault = true; //Nic sie nie zmienilo, stoi w miejscu i swieci dioda
+    else
+    {
+      if(enc_b xor last_enc_a) position--;
+      else position++;
+      last_enc_b = enc_b;
+        
+      last_change_tp_b = change_tp_b;
+      last_change_b_per = change_b_per;
+      if( change_b_per<lowest_change_b_per ) 
+        lowest_change_b_per = change_b_per;
+    }
   }
 }
