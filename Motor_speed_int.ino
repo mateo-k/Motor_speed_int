@@ -16,7 +16,7 @@ const int POT1_ADC_INPUT = 0;
 const int POT2_ADC_INPUT = 7;
 const int POT1_VCC_PIN = 5;
 const int POT2_VCC_PIN = 4;
-const int POT1_MAX_VAL = 1022;
+const int POT1_MAX_VAL = 1021;
 const int POT2_MAX_VAL = 5000;
 
 const int Imcu_PIN = A1;
@@ -58,7 +58,8 @@ volatile long last_change_b_per;
 volatile long lowest_change_a_per = LONG_MAX;
 volatile long lowest_change_b_per = LONG_MAX;
 
-volatile long position;
+volatile long positionA;
+volatile long positionB;
 
 volatile short cur_act;
 volatile short cur_avg;
@@ -103,38 +104,63 @@ const long MAX_PWM = 255L;
   bool dir = pwm>0 ? 1 : 0 ;
   pwm = pwm>0 ? pwm : -pwm;
 
-  if(fault)
-    digitalWrite(LED,HIGH);
-  else
-    digitalWrite(LED,LOW);
-  fault = false;
 
   digitalWrite(DIR_MAX_PIN, dir);
-  if(pwm == 255) digitalWrite(PWM_MAX_PIN, HIGH);
-  else if(pwm >64) analogWrite(PWM_MAX_PIN, pwm);
-  else digitalWrite(PWM_MAX_PIN, LOW);
+  if(pwm == 255)
+  { 
+    digitalWrite(PWM_MAX_PIN, HIGH);
+  }
+  else if(pwm >64) 
+  {
+    noInterrupts();
+    analogWrite(PWM_MAX_PIN, pwm);
+    interrupts();
+  }
+  else 
+  {
+    digitalWrite(PWM_MAX_PIN, LOW);
+  }
+  
+  static long last_motor_posA_val;
   
   unsigned long millisec = millis();
   static unsigned long last_millis;
   if(millisec - last_millis > 250)
   {
     last_millis = millisec;
-      
+    
+    if(fault)
+      digitalWrite(LED,HIGH);
+    else
+      digitalWrite(LED,LOW);
+    fault = false;
+
+  long motor_posA_val = motor_posA();
+  long rpm = ( motor_posA_val - last_motor_posA_val )*4*60 / 6;
+
+  
     Serial.print(pot1);
     Serial.print("\t");
-    Serial.print(motor_pos());
+    Serial.print(rpm);
     Serial.print("\t");
-    if ( cur_surge() )
+    Serial.print(motor_posA_val - last_motor_posA_val);
+    last_motor_posA_val = motor_posA_val;
+    Serial.print("\t");
+    Serial.print(motor_posA_val-motor_posB());
+    Serial.print("\t");
+/*    if ( cur_surge() )
       Serial.print("cur_surge = true \t");
     else
       Serial.print("cur_surge = false\t");
-
+*/
     Serial.print(cur_act);
     Serial.print("\t");
     Serial.print(cur_avg);
-    Serial.print("\n");
+    Serial.print("\t");
+
     MotorControl();
   }
+  //Serial.print("\n");
 }
 
 void MotorControl()
@@ -168,10 +194,6 @@ void MotorControl()
     printable_lowest_change_b_per = loc_lowest_change_b_per;
   else
     printable_lowest_change_b_per = LONG_MAX;
-    
-  noInterrupts();
-  loc_position = position;
-  interrupts();
 
   noInterrupts();
   loc_last_change_a_per = last_change_a_per;
@@ -189,6 +211,7 @@ void MotorControl()
 
   // przerwanie z kanału B enkodera wydaje się przychodzić częściej niż
   // powinno. Porównaj kanał A do B na oscyloskopie.
+
   Serial.print(loc_position);
   Serial.print("\t");
   Serial.print(freq_a);
@@ -208,11 +231,19 @@ void MotorControl()
 
 }
 
-long motor_pos()
+inline long motor_posA()
 {
   static long loc_position;
   noInterrupts();
-  loc_position = position;
+  loc_position = positionA;
+  interrupts();
+  return loc_position;
+}
+inline long motor_posB()
+{
+  static long loc_position;
+  noInterrupts();
+  loc_position = positionA;
   interrupts();
   return loc_position;
 }
@@ -223,7 +254,7 @@ bool cur_surge()
   static long  cur_sum = 0;
   static short tab_pos = 0;
 
-  static bool init = true;
+  volatile static bool init = true;
 
   if (tab_pos == N_AVG_CUR-1)
     init = false;
@@ -238,10 +269,10 @@ bool cur_surge()
 
   cur_avg = cur_sum / N_AVG_CUR;
 
-  if ( cur_act > CUR_SURGE_P*cur_avg && ~init)
-    return true;
-  else
+  if ( (init == true) || cur_act <= (CUR_SURGE_P * cur_avg) )
     return false;
+  else
+    return true;
 }
 
 void orient_motor()
@@ -263,24 +294,23 @@ void Enc_a_ISR()
   static long change_a_per;
   change_a_per = (change_tp_a - last_change_tp_a);
 
-  if (change_a_per > MIN_PERIOD)
+  //if (change_a_per > MIN_PERIOD)
   {
     static bool enc_a;
     enc_a = digitalRead(ENC_A_PIN);
     if (enc_a and last_enc_a) fault = true; //Nic sie nie zmienilo, stoi w miejscu i swieci dioda
     else
     {
-      if(enc_a xor last_enc_b) position++;
-      else position--;
-      last_enc_a = enc_a;
+      if(enc_a xor last_enc_b) positionA++;
+      else positionA--;
       
       last_change_tp_a = change_tp_a;
       last_change_a_per = change_a_per;
       if( change_a_per<lowest_change_a_per ) 
         lowest_change_a_per = change_a_per;  
     }
-  }
-    
+    last_enc_a = enc_a;
+  } 
 }
 
 void Enc_b_ISR()
@@ -290,21 +320,21 @@ void Enc_b_ISR()
   static long change_b_per;
   change_b_per = (change_tp_b - last_change_tp_b);
 
-  if (change_b_per > MIN_PERIOD)
+ // if (change_b_per > MIN_PERIOD)
   {
     static bool enc_b;
     enc_b = digitalRead(ENC_B_PIN);
     if (enc_b and last_enc_b) fault = true; //Nic sie nie zmienilo, stoi w miejscu i swieci dioda
     else
     {
-      if(enc_b xor last_enc_a) position--;
-      else position++;
-      last_enc_b = enc_b;
+      if(enc_b xor last_enc_a) positionB--;
+      else positionB++;
         
       last_change_tp_b = change_tp_b;
       last_change_b_per = change_b_per;
       if( change_b_per<lowest_change_b_per ) 
         lowest_change_b_per = change_b_per;
     }
+    last_enc_b = enc_b;
   }
 }
