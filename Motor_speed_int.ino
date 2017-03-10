@@ -18,7 +18,7 @@ const int POT1_ADC_INPUT = 0;
 const int POT2_ADC_INPUT = 7;
 const int POT1_VCC_PIN = 5;
 const int POT2_VCC_PIN = 4;
-const int POT1_MAX_VAL = 1022;
+const int POT1_MAX_VAL = 4990;
 const int POT2_MAX_VAL = 5000;
 
 const int Imcu_PIN = A1;
@@ -40,9 +40,6 @@ const int nEN_MAX_PIN = 6;
 //Podlaczenie enkodera silnika
 const int ENC_A_PIN = 2;
 const int ENC_B_PIN = 3;
-
-//Filtracja enkodera
-const int MIN_PERIOD = 200;
 
 volatile bool last_enc_a;
 volatile bool last_enc_b;
@@ -92,14 +89,14 @@ void setup() {
 void loop() {
   static long loc_lowest_change_a_per;
   static long loc_lowest_change_b_per;
-  static long printable_lowest_change_a_per;
-  static long printable_lowest_change_b_per;
+  static long printable_lowest_change_a_per = LONG_MAX;
+  static long printable_lowest_change_b_per = LONG_MAX;
   static long loc_position;
   static long loc_last_change_a_per;
   static long loc_last_change_b_per;
   
 const long PROCENT = 100L;
-  int pot1 = (PROCENT * analogRead(POT1_ADC_INPUT) )/POT1_MAX_VAL;
+  int pot1 = (PROCENT * AREF * analogRead(POT1_ADC_INPUT) ) / (POT1_MAX_VAL * (long)ADC_MAXVAL );
 const long MAX_PWM = 255L;
   int pwm = ((pot1 - PROCENT/2) * MAX_PWM) / (PROCENT/2);
   bool dir = pwm>0 ? 1 : 0 ;
@@ -126,25 +123,18 @@ const long MAX_PWM = 255L;
     loc_lowest_change_a_per = lowest_change_a_per;
     lowest_change_a_per = LONG_MAX;
     interrupts();
-
-
-    
+  
     if(loc_lowest_change_a_per < LONG_MAX)
       printable_lowest_change_a_per = loc_lowest_change_a_per;
-    else
-      printable_lowest_change_a_per = LONG_MAX;
-      
+  
     noInterrupts();
     loc_lowest_change_b_per = lowest_change_b_per;
     lowest_change_b_per = LONG_MAX;
     interrupts();
-    printable_lowest_change_b_per = LONG_MAX;
-
+  
     if(loc_lowest_change_b_per < LONG_MAX)
       printable_lowest_change_b_per = loc_lowest_change_b_per;
-    else
-      printable_lowest_change_b_per = LONG_MAX;
-      
+  
     noInterrupts();
     loc_position = position;
     interrupts();
@@ -161,11 +151,10 @@ const long MAX_PWM = 255L;
     unsigned int freq_b = USEC_IN_SEC / loc_last_change_b_per; 
 
     unsigned int max_freq_a = USEC_IN_SEC / loc_lowest_change_a_per; 
-    unsigned int max_freq_b = USEC_IN_SEC / loc_lowest_change_b_per; 
+    unsigned int max_freq_b = USEC_IN_SEC / loc_lowest_change_a_per; 
 
-// przerwanie z kanału B enkodera wydaje się przychodzić częściej niż
-// powinno. Porównaj kanał A do B na oscyloskopie.
-
+    Serial.print(analogRead(POT1_ADC_INPUT));
+    Serial.print("\t");
     Serial.print(pot1);
     Serial.print("\t");
     Serial.print(loc_position);
@@ -187,52 +176,38 @@ const long MAX_PWM = 255L;
 
 void Enc_a_ISR()
 {
+  static bool enc_a;
+  enc_a = digitalRead(ENC_A_PIN);
+  if (enc_a and last_enc_a) fault = true; //Nic sie nie zmienilo, stoi w miejscu i swieci dioda
+  else if(enc_a xor last_enc_b) position++;
+  else position--;
+  last_enc_a = enc_a;
   
   static long change_tp_a;
   change_tp_a = micros();
   static long change_a_per;
   change_a_per = (change_tp_a - last_change_tp_a);
-
-  if (change_a_per > MIN_PERIOD)
-  {
-    static bool enc_a;
-    enc_a = digitalRead(ENC_A_PIN);
-    if (enc_a and last_enc_a) fault = true; //Nic sie nie zmienilo, stoi w miejscu i swieci dioda
-    else if(enc_a xor last_enc_b) position++;
-    else position--;
-    last_enc_a = enc_a;
-    
-    last_change_tp_a = change_tp_a;
-    last_change_a_per = change_a_per;
-    if( change_a_per<lowest_change_a_per ) 
-      lowest_change_a_per = change_a_per;  
-  }
-    
+  last_change_tp_a = change_tp_a;
+  last_change_a_per = change_a_per;
+  if( change_a_per<lowest_change_a_per ) 
+    lowest_change_a_per = change_a_per;  
 }
 
 void Enc_b_ISR()
 {
+  static bool enc_b;
+  enc_b = digitalRead(ENC_B_PIN);
+  if (enc_b and last_enc_b) fault = true; //Nic sie nie zmienilo, stoi w miejscu i swieci dioda
+  else if(enc_b xor last_enc_a) position--;
+  else position++;
+  last_enc_b = enc_b;
+    
   static long change_tp_b;
   change_tp_b = micros();
   static long change_b_per;
   change_b_per = (change_tp_b - last_change_tp_b);
-
-  if (change_b_per > MIN_PERIOD)
-  {
-    static bool enc_b;
-    enc_b = digitalRead(ENC_B_PIN);
-    if (enc_b and last_enc_b) fault = true; //Nic sie nie b, stoi w miejscu i swieci dioda
-    else if(enc_b xor last_enc_a) position--;
-    else position++;
-    last_enc_b = enc_b;
-      
-    static long change_tp_b;
-    change_tp_b = micros();
-    static long change_b_per;
-    change_b_per = (change_tp_b - last_change_tp_b);
-    last_change_tp_b = change_tp_b;
-    last_change_b_per = change_b_per;
-    if( change_b_per<lowest_change_b_per ) 
-      lowest_change_b_per = change_b_per;
-  }
+  last_change_tp_b = change_tp_b;
+  last_change_b_per = change_b_per;
+  if( change_b_per<lowest_change_b_per ) 
+    lowest_change_b_per = change_b_per;
 }
