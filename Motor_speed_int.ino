@@ -83,7 +83,7 @@ double Setpoint, Input, Output;
 double Error = FLT_MAX ;
 
 //Specify the links and initial tuning parameters
-PID myPID(&Input, &Output, &Setpoint,0.1,0.00,0., DIRECT);
+PID myPID(&Input, &Output, &Setpoint,0.1,0.00,0.00, DIRECT);
 
 
 //Parametry czujnikow pradu
@@ -219,52 +219,6 @@ void MotorControl()
 
   delay(1);        // delay in between reads for stability
 
-}
-
-
-long motor_pos()
-{
-  noInterrupts();
-  long loc_position = position;
-  interrupts();
-  return loc_position;
-}
-
-
-
-bool cur_surge()
-{
-  static short cur_tab[N_AVG_CUR] = {0};
-  static long  cur_sum = 0;
-  static short tab_pos = 0;
-
-  static bool init = true;
-
-  if (tab_pos == N_AVG_CUR - 1)
-    init = false;
-
-  cur_sum -= cur_tab[tab_pos];
-
-  int cur_raw = analogRead(Idrv_ADC_INPUT);
-  int cur_mV  = ( cur_raw * AREF) / (ADC_MAXVAL) - AREF / 2;
-  int cur_mA  =  ( cur_mV * 1000L ) / Idrv_CUR_SENSIVITY + Idrv_CUR_IMBALANCE;
-
-  cur_tab[tab_pos] = - cur_mA ;
-  cur_sum += - cur_mA;
-
-  tab_pos = tab_pos >= N_AVG_CUR - 1 ? 0 : tab_pos + 1;
-
-  cur_avg = cur_sum / N_AVG_CUR;
-
-  Serial.print(cur_avg);
-  Serial.print("\t");
-  Serial.print(init);
-  Serial.print("\t");
-
-  if ( init == true || cur_avg <= CUR_SURGE )
-    return false;
-  else
-    return true;
 }
 
 void drive_motor(int pwm) // pwm = [-255:255]
