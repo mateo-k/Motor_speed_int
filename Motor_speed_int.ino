@@ -6,7 +6,7 @@
 const long AREF = 5000;
 const float ADC_MAXVAL = 1023.0;
 
-const double MAX_POS_ERROR = 300.;
+const double MAX_POS_ERROR = 1000;
 
 const int ANALOG_INPUTS = 8;
 
@@ -49,7 +49,7 @@ const int MIN_PERIOD = 0;
 
 //Orientacja rotora
 const int CUR_SURGE = 129;  // prąd krańcówki (mA)
-const int N_AVG_CUR = 10;    // bufor uśredniania prądu
+const int N_AVG_CUR = 10;   // bufor uśredniania prądu
 
 volatile bool last_enc_a;
 volatile bool last_enc_b;
@@ -83,7 +83,7 @@ double Setpoint, Input, Output;
 double Error = FLT_MAX ;
 
 //Specify the links and initial tuning parameters
-PID myPID(&Input, &Output, &Setpoint,0.25,0.00,0., DIRECT);
+PID myPID(&Input, &Output, &Setpoint,0.1,0.00,0., DIRECT);
 
 
 //Parametry czujnikow pradu
@@ -128,20 +128,12 @@ void setup() {
   //turn the PID on
   myPID.SetOutputLimits(-255.,+255.);
   myPID.SetMode(AUTOMATIC);
+  myPID.SetSampleTime(1);
 
   orient_motor();
 }
 
 void loop() {
-
-  static long loc_lowest_change_a_per;
-  static long loc_lowest_change_b_per;
-  static long printable_lowest_change_a_per = LONG_MAX;
-  static long printable_lowest_change_b_per = LONG_MAX;
-  static long loc_position;
-  static long loc_last_change_a_per;
-  static long loc_last_change_b_per;
-
 
   int pot1 = (PROCENT * AREF * analogRead(POT1_ADC_INPUT) ) / (POT1_MAX_VAL * (long)ADC_MAXVAL );
   int pwm = ((pot1 - PROCENT / 2) * MAX_PWM) / (PROCENT / 2);
@@ -154,34 +146,8 @@ void loop() {
     digitalWrite(LED, LOW);
   fault = false;
 
-//  digitalWrite(DIR_MAX_PIN, dir);
-//  if (pwm == 255) digitalWrite(PWM_MAX_PIN, HIGH);
-//  else if (pwm > 64) analogWrite(PWM_MAX_PIN, pwm);
-//  else digitalWrite(PWM_MAX_PIN, LOW);
+  set_motor_pos(pot1*128);
 
-  unsigned long millisec = millis();
-  static unsigned long last_millis;
-  if (millisec - last_millis > 250)
-  {
-//    last_millis = millisec;
-//
-//    Serial.print(pot1);
-//    Serial.print("\t");
-//    Serial.print(motor_pos());
-//    Serial.print("\t");
-//    if ( cur_surge() )
-//      Serial.print("cur_surge = true \t");
-//    else
-//      Serial.print("cur_surge = false\t");
-//
-//    Serial.print(cur_act);
-//    Serial.print("\t");
-//    Serial.print(cur_avg);
-//    Serial.print("\n");
-//    MotorControl();
-    set_motor_pos(pot1*128);
-//    delay(1);
-  }
 }
 
 void MotorControl()
@@ -308,13 +274,12 @@ void drive_motor(int pwm) // pwm = [-255:255]
 
   digitalWrite(DIR_MAX_PIN, dir);
   if (pwm == 255) digitalWrite(PWM_MAX_PIN, HIGH);
-  else if (pwm < 1) analogWrite(PWM_MAX_PIN, LOW);
+  else if (pwm < 128) analogWrite(PWM_MAX_PIN, LOW);
   else digitalWrite(PWM_MAX_PIN, pwm);
 }
 
 void orient_motor()
 {
-
   Serial.print("\n");
   Serial.print("Ustawianie pozycji zerowej...");
   Serial.print("\n");
@@ -325,28 +290,9 @@ void orient_motor()
   drive_motor(200);         // wlacz maks. moc silnika w jedna strone
   delay(100);
 
-  //  while ( ! cur_surge() ) ; // czekaj na wzrost mocy - krancowka
- 
-//  int cntr = 0;
   while( true )   // czekaj na wzrost mocy - krancowka
   {
-    if (motor_stop()) break ;
-    
-//    Serial.print(cntr);
-//    Serial.print('\n');
-
-//    if (cntr <= 1000)
-//    {
-//      drive_motor(255);
-//      ++ cntr;
-//    }
-//    else if ( (cntr > 1000) && (cntr < 2000) )
-//    {
-//      drive_motor(0);
-//      ++ cntr;
-//    }
-//    else
-//      cntr = 0;
+    if (motor_stop()) break ;    
     delay(1);
    }
    
@@ -369,23 +315,6 @@ void orient_motor()
   while( true )   // czekaj na wzrost mocy - krancowka
   {
     if (motor_stop()) break ;
-//    Serial.print(cntr);
-//    Serial.print('\n');
-    
-
-//   if (cntr <= 1000)
-//    {
-//      drive_motor(-255);
-//      ++ cntr;
-//    }
-//    else if ( (cntr > 1000) && (cntr < 2000) )
-//    {
-//      drive_motor(0);
-//      ++ cntr;
-//    }
-//    else
-//      cntr = 0;
-
     delay(1);
   };
   
@@ -407,7 +336,7 @@ void orient_motor()
   {
     Serial.print("Ustawianie pozycji zerowej");
     Serial.print("\n");
-    delay(1);
+//    delay(1);
   } 
   
   drive_motor(0) ;    
