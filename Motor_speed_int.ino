@@ -6,7 +6,7 @@
 const long AREF = 5000;
 const float ADC_MAXVAL = 1023.0;
 
-const float MAX_POS_ERROR = 2;
+const double MAX_POS_ERROR = 300.;
 
 const int ANALOG_INPUTS = 8;
 
@@ -45,10 +45,10 @@ const int ENC_A_PIN = 2;
 const int ENC_B_PIN = 3;
 
 //Filtracja enkodera
-const int MIN_PERIOD = 200;
+const int MIN_PERIOD = 0;
 
 //Orientacja rotora
-const int CUR_SURGE = 150;  // prąd krańcówki (mA)
+const int CUR_SURGE = 129;  // prąd krańcówki (mA)
 const int N_AVG_CUR = 10;    // bufor uśredniania prądu
 
 volatile bool last_enc_a;
@@ -63,7 +63,7 @@ volatile long last_change_b_per;
 volatile long lowest_change_a_per = LONG_MAX;
 volatile long lowest_change_b_per = LONG_MAX;
 
-volatile long position;
+volatile long position = 0;
 volatile long max_pos;
 volatile long min_pos;
 
@@ -75,12 +75,15 @@ const long USEC_IN_SEC = 1000000;
 
 const int MAX_PWM = 255;
 
+const long MAX_MOT_PERIOD = 20000;
+
 //////////////////////////////// PID controller
 //Define Variables we'll be connecting to
 double Setpoint, Input, Output;
+double Error = FLT_MAX ;
 
 //Specify the links and initial tuning parameters
-PID myPID(&Input, &Output, &Setpoint,0.2,0.01,0.01, DIRECT);
+PID myPID(&Input, &Output, &Setpoint,0.25,0.00,0., DIRECT);
 
 
 //Parametry czujnikow pradu
@@ -106,6 +109,9 @@ void setup() {
   pinMode(DIR_MAX_PIN, OUTPUT);
   //pinMode(eEN_MAX_PIN, OUTPUT);
 
+  pinMode(ENC_A_PIN, INPUT_PULLUP);
+  pinMode(ENC_B_PIN, INPUT_PULLUP);
+
   //Configure motor encoders
   last_enc_a = digitalRead(ENC_A_PIN);
   last_enc_b = digitalRead(ENC_B_PIN);
@@ -115,6 +121,15 @@ void setup() {
 
   // initialize serial communication at 9600 bits per second:
   Serial.begin(9600);
+
+  Setpoint = 0;
+  Input = 0;
+
+  //turn the PID on
+  myPID.SetOutputLimits(-255.,+255.);
+  myPID.SetMode(AUTOMATIC);
+
+  orient_motor();
 }
 
 void loop() {
@@ -139,31 +154,33 @@ void loop() {
     digitalWrite(LED, LOW);
   fault = false;
 
-  digitalWrite(DIR_MAX_PIN, dir);
-  if (pwm == 255) digitalWrite(PWM_MAX_PIN, HIGH);
-  else if (pwm > 64) analogWrite(PWM_MAX_PIN, pwm);
-  else digitalWrite(PWM_MAX_PIN, LOW);
+//  digitalWrite(DIR_MAX_PIN, dir);
+//  if (pwm == 255) digitalWrite(PWM_MAX_PIN, HIGH);
+//  else if (pwm > 64) analogWrite(PWM_MAX_PIN, pwm);
+//  else digitalWrite(PWM_MAX_PIN, LOW);
 
   unsigned long millisec = millis();
   static unsigned long last_millis;
   if (millisec - last_millis > 250)
   {
-    last_millis = millisec;
-
-    Serial.print(pot1);
-    Serial.print("\t");
-    Serial.print(motor_pos());
-    Serial.print("\t");
-    if ( cur_surge() )
-      Serial.print("cur_surge = true \t");
-    else
-      Serial.print("cur_surge = false\t");
-
-    Serial.print(cur_act);
-    Serial.print("\t");
-    Serial.print(cur_avg);
-    Serial.print("\n");
-    MotorControl();
+//    last_millis = millisec;
+//
+//    Serial.print(pot1);
+//    Serial.print("\t");
+//    Serial.print(motor_pos());
+//    Serial.print("\t");
+//    if ( cur_surge() )
+//      Serial.print("cur_surge = true \t");
+//    else
+//      Serial.print("cur_surge = false\t");
+//
+//    Serial.print(cur_act);
+//    Serial.print("\t");
+//    Serial.print(cur_avg);
+//    Serial.print("\n");
+//    MotorControl();
+    set_motor_pos(pot1*128);
+//    delay(1);
   }
 }
 
@@ -247,6 +264,8 @@ long motor_pos()
   return loc_position;
 }
 
+
+
 bool cur_surge()
 {
   static short cur_tab[N_AVG_CUR] = {0};
@@ -264,14 +283,19 @@ bool cur_surge()
   int cur_mV  = ( cur_raw * AREF) / (ADC_MAXVAL) - AREF / 2;
   int cur_mA  =  ( cur_mV * 1000L ) / Idrv_CUR_SENSIVITY + Idrv_CUR_IMBALANCE;
 
-  cur_tab[tab_pos] = cur_mA;
-  cur_sum += cur_mA;
+  cur_tab[tab_pos] = - cur_mA ;
+  cur_sum += - cur_mA;
 
   tab_pos = tab_pos >= N_AVG_CUR - 1 ? 0 : tab_pos + 1;
 
   cur_avg = cur_sum / N_AVG_CUR;
 
-  if ( init == true || cur_avg < CUR_SURGE )
+  Serial.print(cur_avg);
+  Serial.print("\t");
+  Serial.print(init);
+  Serial.print("\t");
+
+  if ( init == true || cur_avg <= CUR_SURGE )
     return false;
   else
     return true;
@@ -279,71 +303,183 @@ bool cur_surge()
 
 void drive_motor(int pwm) // pwm = [-255:255]
 {
-  bool dir = pwm > 0 ? 1 : 0 ;
+  bool dir = pwm < 0 ? 1 : 0 ;
   pwm = pwm > 0 ? pwm : -pwm;
 
   digitalWrite(DIR_MAX_PIN, dir);
   if (pwm == 255) digitalWrite(PWM_MAX_PIN, HIGH);
-  else if (pwm > 64) analogWrite(PWM_MAX_PIN, pwm);
-  else digitalWrite(PWM_MAX_PIN, LOW);
+  else if (pwm < 1) analogWrite(PWM_MAX_PIN, LOW);
+  else digitalWrite(PWM_MAX_PIN, pwm);
 }
 
 void orient_motor()
 {
-  drive_motor(255);         // wlacz maks. moc silnika w jedna strone
-  while ( ! cur_surge() ) ; // czekaj na wzrost mocy - krancowka
+
+  Serial.print("\n");
+  Serial.print("Ustawianie pozycji zerowej...");
+  Serial.print("\n");
+
+  Serial.print("ustaw skrajna pozycje lewa");
+  Serial.print("\n");
+  delay(1000);
+  drive_motor(200);         // wlacz maks. moc silnika w jedna strone
+  delay(100);
+
+  //  while ( ! cur_surge() ) ; // czekaj na wzrost mocy - krancowka
+ 
+//  int cntr = 0;
+  while( true )   // czekaj na wzrost mocy - krancowka
+  {
+    if (motor_stop()) break ;
+    
+//    Serial.print(cntr);
+//    Serial.print('\n');
+
+//    if (cntr <= 1000)
+//    {
+//      drive_motor(255);
+//      ++ cntr;
+//    }
+//    else if ( (cntr > 1000) && (cntr < 2000) )
+//    {
+//      drive_motor(0);
+//      ++ cntr;
+//    }
+//    else
+//      cntr = 0;
+    delay(1);
+   }
+   
+  drive_motor(0) ;        // wlacz maks. moc silnika w druga strone
+  Serial.print("pozycja ustawiona");
+  Serial.print("\n");
+  
   noInterrupts();
   long loc_min_pos = position ;  // zachowaj pozycje enkodera
   interrupts();
+  
+  Serial.print("ustaw skrajna pozycje prawa");
+  Serial.print("\n");
 
-  drive_motor(-255) ;        // wlacz maks. moc silnika w druga strone
-  while ( ! cur_surge() ) ;  // czekaj na wzrost mocy - krancowka
+  delay(100);
+  
+  drive_motor(-200) ;        // wlacz maks. moc silnika w druga strone
+  delay(100);
 
+  while( true )   // czekaj na wzrost mocy - krancowka
+  {
+    if (motor_stop()) break ;
+//    Serial.print(cntr);
+//    Serial.print('\n');
+    
+
+//   if (cntr <= 1000)
+//    {
+//      drive_motor(-255);
+//      ++ cntr;
+//    }
+//    else if ( (cntr > 1000) && (cntr < 2000) )
+//    {
+//      drive_motor(0);
+//      ++ cntr;
+//    }
+//    else
+//      cntr = 0;
+
+    delay(1);
+  };
+  
+  Serial.print("pozycja ustawiona");
+  Serial.print("\n");
+  
   noInterrupts();
   long loc_max_pos = position ; // zachowaj pozycje enkodera
   interrupts();
 
   long drive_range =  ( loc_max_pos - loc_min_pos );    // zakres ruchu silnika
   long center_pos = loc_min_pos + ( drive_range / 2 ) ; // srodkowa pozycja
-  set_motor_pos(center_pos);    // ustaw pozycje silnika na srodek
-
+  
+  Serial.print("ustaw pozycje: ");
+  Serial.print(center_pos);
+  Serial.print("\n");
+  
+  while (set_motor_pos(center_pos) > MAX_POS_ERROR)  // ustaw pozycje silnika na srodek
+  {
+    Serial.print("Ustawianie pozycji zerowej");
+    Serial.print("\n");
+    delay(1);
+  } 
+  
+  drive_motor(0) ;    
   noInterrupts();
   position = 0;                 // zresetuj pozycje silnika do zera
   interrupts();
 
+  
+  Serial.print("Pozycja zerowa ustawiona");
+  Serial.print("\n");
   max_pos = drive_range/2;      // ustaw zakres ruchu silnika
   min_pos = -drive_range/2;
-}
-
-
-
-void set_motor_pos(long pos)
-{
-  double Error = FLT_MAX ;
-  Setpoint = (double) pos;
-  int loc_output ;
-  while (Error >= MAX_POS_ERROR)
-  {  
-    noInterrupts();
-    Input = position;
-    interrupts();
-    myPID.Compute();
-    
-    if (Output > 255. )
-      loc_output = 255;
-    else if (Output < -255.)
-      loc_output = -255;
-    else
-      loc_output = (int) Output;
   
-    drive_motor(loc_output);
-    Error = Setpoint - Input;
-
-    delay(1); 
-  }
 }
 
 
+double set_motor_pos(long pos)
+{
+  
+  noInterrupts();
+  Input = position;
+  interrupts();
+  
+  Setpoint = (double) pos;
+  
+  Error = Input - Setpoint;
+
+  if ((Error < MAX_POS_ERROR) && (Error > - MAX_POS_ERROR))
+    return Error;
+     
+  int loc_output ;
+
+  myPID.Compute();
+  
+  if (Output > 255. )
+    loc_output = 255;
+  else if (Output < -255.)
+    loc_output = -255;
+  else
+    loc_output = (int) Output;
+
+  drive_motor(loc_output);
+
+  Serial.print(pos);
+  Serial.print('\t');
+  Serial.print(Input);
+  Serial.print('\t');
+  Serial.print(loc_output);
+  Serial.print('\t');
+  Serial.print(Output);
+  Serial.print('\t');
+  Serial.print(Setpoint);
+  Serial.print('\t');
+  Serial.print(Error);
+  Serial.print('\n');
+
+  
+  Error = Error > 0 ? Error : - Error;
+  return Error;
+//  delay(1); 
+}
+
+bool motor_stop()
+{
+  if(last_change_a_per > MAX_MOT_PERIOD)
+    return true;
+  
+  if(last_change_b_per > MAX_MOT_PERIOD)
+    return true;
+
+  return false;  
+}
 
 void Enc_a_ISR()
 {
