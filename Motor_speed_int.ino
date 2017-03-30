@@ -55,8 +55,8 @@ volatile bool last_enc_a;
 volatile bool last_enc_b;
 volatile bool fault;
 
-volatile long last_change_tp_a;
-volatile long last_change_tp_b;
+volatile long last_change_tp_a = 0;
+volatile long last_change_tp_b = 0;
 
 volatile long last_change_a_per;
 volatile long last_change_b_per;
@@ -146,8 +146,9 @@ void loop() {
     digitalWrite(LED, LOW);
   fault = false;
 
+ //------------------------------TODO
+ //Zmienic skalowanie potencjometru z 128 na od 10 do 90%.
   set_motor_pos(pot1*128);
-
 }
 
 void MotorControl()
@@ -228,8 +229,8 @@ void drive_motor(int pwm) // pwm = [-255:255]
 
   digitalWrite(DIR_MAX_PIN, dir);
   if (pwm == 255) digitalWrite(PWM_MAX_PIN, HIGH);
-  else if (pwm < 128) analogWrite(PWM_MAX_PIN, LOW);
-  else digitalWrite(PWM_MAX_PIN, pwm);
+  else if (pwm > 100) analogWrite(PWM_MAX_PIN, pwm);
+  else digitalWrite(PWM_MAX_PIN, LOW);
 }
 
 void orient_motor()
@@ -238,51 +239,57 @@ void orient_motor()
   Serial.print("Ustawianie pozycji zerowej...");
   Serial.print("\n");
 
-  Serial.print("ustaw skrajna pozycje lewa");
+  Serial.print("ustaw skrajna pozycje lewa (min)");
   Serial.print("\n");
   delay(1000);
-  drive_motor(200);         // wlacz maks. moc silnika w jedna strone
-  delay(100);
-
+  drive_motor(255);
+  delay(30);
+  drive_motor(160);         // wlacz maks. moc silnika w jedna strone
+  delay(50);
+  
   while( true )   // czekaj na wzrost mocy - krancowka
   {
     if (motor_stop()) break ;    
     delay(1);
-   }
+  }
    
-  drive_motor(0) ;        // wlacz maks. moc silnika w druga strone
-  Serial.print("pozycja ustawiona");
-  Serial.print("\n");
-  
+  drive_motor(0);   
   noInterrupts();
   long loc_min_pos = position ;  // zachowaj pozycje enkodera
   interrupts();
   
-  Serial.print("ustaw skrajna pozycje prawa");
+  Serial.print("pozycja ustawiona (min): ");
+  Serial.print(loc_min_pos);
+  Serial.print("\n");
+  
+  Serial.print("ustaw skrajna pozycje prawa (max)");
   Serial.print("\n");
 
   delay(100);
+  drive_motor(-255);
+  delay(30);
+  drive_motor(-160) ;        // wlacz maks. moc silnika w druga strone
+  delay(50);
   
-  drive_motor(-200) ;        // wlacz maks. moc silnika w druga strone
-  delay(100);
-
   while( true )   // czekaj na wzrost mocy - krancowka
   {
     if (motor_stop()) break ;
     delay(1);
   };
   
-  Serial.print("pozycja ustawiona");
-  Serial.print("\n");
-  
+  drive_motor(0);  
   noInterrupts();
   long loc_max_pos = position ; // zachowaj pozycje enkodera
   interrupts();
+  
+  Serial.print("pozycja ustawiona (max):");
+  Serial.print(loc_max_pos);
+  Serial.print("\n");
 
   long drive_range =  ( loc_max_pos - loc_min_pos );    // zakres ruchu silnika
   long center_pos = loc_min_pos + ( drive_range / 2 ) ; // srodkowa pozycja
   
-  Serial.print("ustaw pozycje: ");
+  Serial.print("ustaw pozycje w centrum: ");
   Serial.print(center_pos);
   Serial.print("\n");
   
@@ -298,12 +305,16 @@ void orient_motor()
   position = 0;                 // zresetuj pozycje silnika do zera
   interrupts();
 
-  
   Serial.print("Pozycja zerowa ustawiona");
   Serial.print("\n");
   max_pos = drive_range/2;      // ustaw zakres ruchu silnika
   min_pos = -drive_range/2;
-  
+
+  Serial.print("pozycja min: ");
+  Serial.print(min_pos);
+  Serial.print("\npozycja max:");
+  Serial.print(max_pos);
+  Serial.print("\n");
 }
 
 
@@ -355,11 +366,45 @@ double set_motor_pos(long pos)
 
 bool motor_stop()
 {
-  if(last_change_a_per > MAX_MOT_PERIOD)
-    return true;
+  long now_tp = micros();
   
-  if(last_change_b_per > MAX_MOT_PERIOD)
+  noInterrupts();
+  long loc_change_tp_a = last_change_tp_a;
+  interrupts();
+  long period = now_tp - loc_change_tp_a;
+  if(period > MAX_MOT_PERIOD)
+  {
+    Serial.print("motor_stop(): return true:\n");
+    Serial.print("pos:");
+    Serial.print(position);
+    Serial.print(" ,now_tp:");
+    Serial.print(now_tp);
+    Serial.print(" ,loc_change_tp_a:");
+    Serial.print(loc_change_tp_a);
+    Serial.print(" ,period:");
+    Serial.print(period); 
+    Serial.print("\n");   
     return true;
+  }
+
+  noInterrupts();
+  long loc_change_tp_b = last_change_tp_b;
+  interrupts();
+  period = now_tp - loc_change_tp_b;
+  if(period > MAX_MOT_PERIOD)
+  {
+    Serial.print("motor_stop(): return true:\n");
+    Serial.print("pos:");
+    Serial.print(position);
+    Serial.print(" ,now_tp:");
+    Serial.print(now_tp);
+    Serial.print(" ,loc_change_tp_a:");
+    Serial.print(loc_change_tp_a);
+    Serial.print(" ,period:");
+    Serial.print(period);  
+    Serial.print("\n");    
+    return true;
+  }
 
   return false;  
 }
@@ -389,13 +434,13 @@ void Enc_a_ISR()
       else position--;
       last_enc_a = enc_a;
 
-      last_change_tp_a = change_tp_a;
       last_change_a_per = change_a_per;
       if ( change_a_per < lowest_change_a_per )
         lowest_change_a_per = change_a_per;
     }
   }
-
+  
+  last_change_tp_a = change_tp_a;
 }
 
 void Enc_b_ISR()
@@ -424,10 +469,11 @@ void Enc_b_ISR()
       else position++;
       last_enc_b = enc_b;
 
-      last_change_tp_b = change_tp_b;
       last_change_b_per = change_b_per;
       if ( change_b_per < lowest_change_b_per )
         lowest_change_b_per = change_b_per;
     }
   }
+  
+  last_change_tp_b = change_tp_b;
 }
