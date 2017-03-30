@@ -15,12 +15,12 @@ const int PROCENT = 100;
 //Podlaczenie pinow
 const int LED = 13;
 
-const int POT1_PIN = A0;
-const int POT2_PIN = A7;
-const int POT1_ADC_INPUT = 0;
-const int POT2_ADC_INPUT = 7;
-const int POT1_VCC_PIN = 5;
-const int POT2_VCC_PIN = 4;
+const int POT1_PIN = A7;
+const int POT2_PIN = A0;
+const int POT1_ADC_INPUT = 7;
+const int POT2_ADC_INPUT = 0;
+const int POT1_VCC_PIN = 4;
+const int POT2_VCC_PIN = 5;
 const int POT1_MAX_VAL = 4990;
 const int POT2_MAX_VAL = 5000;
 
@@ -101,8 +101,10 @@ void setup() {
   //Configure pins for potentiometers
   pinMode(POT1_VCC_PIN, OUTPUT);
   digitalWrite(POT1_VCC_PIN, HIGH);
-  pinMode(POT2_VCC_PIN, OUTPUT);
-  digitalWrite(POT2_VCC_PIN, HIGH);
+  //pinMode(POT2_VCC_PIN, OUTPUT);
+  //digitalWrite(POT2_VCC_PIN, HIGH);
+  pinMode(POT2_VCC_PIN, INPUT_PULLUP);
+  pinMode(POT2_PIN, INPUT_PULLUP);
 
   //Configure pins for motor drv
   pinMode(PWM_MAX_PIN, OUTPUT);
@@ -135,10 +137,10 @@ void setup() {
 
 void loop() {
 
-  int pot1 = (PROCENT * AREF * analogRead(POT1_ADC_INPUT) ) / (POT1_MAX_VAL * (long)ADC_MAXVAL );
-  int pwm = ((pot1 - PROCENT / 2) * MAX_PWM) / (PROCENT / 2);
-  bool dir = pwm > 0 ? 1 : 0 ;
-  pwm = pwm > 0 ? pwm : -pwm;
+//  int pot1 = (PROCENT * AREF * analogRead(POT1_ADC_INPUT) ) / (POT1_MAX_VAL * (long)ADC_MAXVAL );
+//  int pwm = ((pot1 - PROCENT / 2) * MAX_PWM) / (PROCENT / 2);
+//  bool dir = pwm > 0 ? 1 : 0 ;
+//  pwm = pwm > 0 ? pwm : -pwm;
 
   if (fault)
     digitalWrite(LED, HIGH);
@@ -148,7 +150,9 @@ void loop() {
 
  //------------------------------TODO
  //Zmienic skalowanie potencjometru z 128 na od 10 do 90%.
-  set_motor_pos(pot1*128);
+  //set_motor_pos(pot1*128);
+  
+  go();
 }
 
 void MotorControl()
@@ -222,6 +226,62 @@ void MotorControl()
 
 }
 
+void go()
+{
+ 
+  noInterrupts();
+  long pos = position;
+  interrupts();
+
+  int pwm = 0; // stop by default
+  if( (digitalRead(POT2_VCC_PIN) == 0 ) && (digitalRead(POT2_PIN) == 0 ) )
+  {
+    Serial.print("11");
+  }
+  else if(digitalRead(POT2_VCC_PIN) == 0 )
+  {
+    if(pos < (max_pos - 1500))
+      pwm = 255;
+    Serial.print("10");  
+  }
+  else if(digitalRead(POT2_PIN) == 0 )
+  {
+    if(pos > (min_pos + 2500))
+      pwm = -255;
+    Serial.print("01");
+  }
+  else
+  {
+    Serial.print("00"); 
+  }
+  drive_motor(pwm);
+
+//#define DRY_TEST
+#ifdef DRY_TEST
+{
+  min_pos = -9000;
+  max_pos = 9000;
+  
+  if(pwm > 0 ) position+=500;
+  if(pwm < 0 ) position-=500;
+  delay(200);
+}
+#endif
+
+  Serial.print("\tpwm: ");
+  Serial.print(pwm);
+  Serial.print("\tpoz: ");
+  Serial.print(pos);
+  Serial.print("\t,pozycja min: ");
+  Serial.print(min_pos);
+  Serial.print("\t,pozycja max:");
+  Serial.print(max_pos);
+  Serial.print("\n");
+
+}
+
+
+
 void drive_motor(int pwm) // pwm = [-255:255]
 {
   bool dir = pwm < 0 ? 1 : 0 ;
@@ -255,11 +315,11 @@ void orient_motor()
    
   drive_motor(0);   
   noInterrupts();
-  long loc_min_pos = position ;  // zachowaj pozycje enkodera
+  long loc_max_pos = position ;  // zachowaj pozycje enkodera
   interrupts();
   
   Serial.print("pozycja ustawiona (min): ");
-  Serial.print(loc_min_pos);
+  Serial.print(loc_max_pos);
   Serial.print("\n");
   
   Serial.print("ustaw skrajna pozycje prawa (max)");
@@ -279,11 +339,11 @@ void orient_motor()
   
   drive_motor(0);  
   noInterrupts();
-  long loc_max_pos = position ; // zachowaj pozycje enkodera
+  long loc_min_pos = position ; // zachowaj pozycje enkodera
   interrupts();
   
   Serial.print("pozycja ustawiona (max):");
-  Serial.print(loc_max_pos);
+  Serial.print(loc_min_pos);
   Serial.print("\n");
 
   long drive_range =  ( loc_max_pos - loc_min_pos );    // zakres ruchu silnika
